@@ -47,6 +47,7 @@ class SigLipVisionEmbeddings(nn.Module):
             stride=self.patch_size,    # so that no overlap
             padding=0
         )
+        # (batch, channel, height, width) -> (batch, embed_dim, num_patches_height, num_patches_width)
 
         self.num_patches = (self.image_size // self.patch_size) ** 2
         self.num_positions = self.num_patches
