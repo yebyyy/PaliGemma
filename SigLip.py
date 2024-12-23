@@ -70,6 +70,28 @@ class SigLipVisionEmbeddings(nn.Module):
         embeddings = embeddings + self.positional_embedding(self.position_ids)  # positional embedding of all posible positions
         return embeddings
 
+class SigLipEncoderLayer(nn.Module):
+
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.embed_dim = config.hidden_size
+        self.self_attn = SigLipAttention(config)
+        self.layernorm1 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
+        self.mlp = SigLipMLP(config)
+        self.layernorm2 = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
+
+    def forward(self, hidden_states):
+        # (batch, num_patches, embed_dim)
+        residual = hidden_states
+        hidden_states = self.layernorm1(hidden_states)
+        hidden_states, _ = self.self_attn(hidden_states)
+        hidden_states = hidden_states + residual
+
+        residual = hidden_states
+        hidden_states = self.layernorm2(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states = hidden_states + residual
+        return hidden_states
 
 
 class SigLipVisionTransformer(nn.Module):
