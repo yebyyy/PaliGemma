@@ -70,6 +70,21 @@ class SigLipVisionEmbeddings(nn.Module):
         embeddings = embeddings + self.positional_embedding(self.position_ids)  # positional embedding of all posible positions
         return embeddings
 
+class SigLipMLP(nn.Module):
+    
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.fc1 = nn.Linear(config.hidden_size, config.intermediate_size)
+        self.fc2 = nn.Linear(config.intermediate_size, config.hidden_size)
+
+    def forward(self, hidden_state):
+        # (batch, num_patches, embed_dim)
+        hidden_state = self.fc1(hidden_state)
+        hidden_state = nn.functional.gelu(hidden_state, approximate="tanh")
+        hidden_state = self.fc2(hidden_state)
+        return hidden_state
+
 class SigLipEncoderLayer(nn.Module):
 
     def __init__(self, config: SiglipVisionConfig):
@@ -92,7 +107,6 @@ class SigLipEncoderLayer(nn.Module):
         hidden_states = self.mlp(hidden_states)
         hidden_states = hidden_states + residual
         return hidden_states
-
 
 class SigLipVisionTransformer(nn.Module):
     
