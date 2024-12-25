@@ -156,6 +156,22 @@ class SigLipEncoderLayer(nn.Module):
         hidden_states = hidden_states + residual
         return hidden_states
 
+class SigLipVisionEncoder(nn.Module):
+
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.layers = nn.ModuleList(
+            [
+                SigLipEncoderLayer(config) for _ in range(config.num_hidden_layers)
+            ]
+        )
+
+    def forward(self, hidden_states):
+        for layer in self.layers:
+            hidden_states = layer(hidden_states)
+        return hidden_states
+
 class SigLipVisionTransformer(nn.Module):
     
     def __init__(self, config: SiglipVisionConfig):
@@ -164,7 +180,7 @@ class SigLipVisionTransformer(nn.Module):
         self.embed_dim = config.hidden_size
 
         self.embeddings = SigLipVisionEmbeddings(config)  # convolution to embedding + positional embedding
-        self.encoder = SiglipVisionEncoder(config)      # encoder in transformer
+        self.encoder = SigLipVisionEncoder(config)      # encoder in transformer
         self.post_layernorm = nn.LayerNorm(self.embed_dim, eps=config.layer_norm_eps)
     
     def forward(self, pixel_values):
