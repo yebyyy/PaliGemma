@@ -70,6 +70,54 @@ class SigLipVisionEmbeddings(nn.Module):
         embeddings = embeddings + self.positional_embedding(self.position_ids)  # positional embedding of all posible positions
         return embeddings
 
+class SigLipAttention(nn.Module):
+
+    def __init__(self, config: SiglipVisionConfig):
+        super().__init__()
+        self.config = config
+        self.embed_dim = config.hidden_size
+        self.num_heads= config.num_attention_heads
+        self.head_dim = self.embed_dim // self.num_heads
+        self.scale = self.head_dim ** -0.5
+        self.dropout = config.attention_dropout
+
+        self.k_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.v_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.q_proj = nn.Linear(self.embed_dim, self.embed_dim)
+        self.out_proj = nn.Linear(self.embed_dim, self.embed_dim)
+
+    def forward(self, hidden_states:torch.Tensor):
+
+        batch_size, num_patch, embed_dim = hidden_states.size()
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
+        
+        # (batch, num_patches, num_heads, head_dim)
+        q = q.view(batch_size, num_patch, self.num_heads, self.head_dim)
+        k = k.view(batch_size, num_patch, self.num_heads, self.head_dim)
+        v = v.view(batch_size, num_patch, self.num_heads, self.head_dim)
+
+        # (batch, num_heads, num_patches, head_dim)
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # (batch, num_heads, num_patches, num_patches)
+        attn_weights = torch.matmul(q, k.transpose(-2, -1)) * self.scale
+
+        attn_weights = nn.functional.softmax(attn_weights, dim=-1)
+
+        attn_weights = nn.functional.dropout(attn_weights, p=self.dropout, training=self.training)
+
+        attn_output = torch.matmul(attn_weights, v)
+
+        attn_output = attn_output.transpose(1, 2).contiguous()  # contiguous is to restore the stride property
+        attn_output = attn_output.reshape(batch_size, num_patch, self.embed_dim)
+
+        attn_output = self.out_proj(attn_output)
+        return attn_output, attn_weights
+
 class SigLipMLP(nn.Module):
     
     def __init__(self, config: SiglipVisionConfig):
