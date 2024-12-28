@@ -69,6 +69,17 @@ class PaliGemmaConfig():
         self.text_config.num_image_tokens = (self.vision_config.image_size // self.vision_config.patch_size) ** 2
         self.vision_config.projection_dim = projection_dim
 
+class PaliGemmaLinearProjector(nn.Module):
+
+    def __init__(self, config: PaliGemmaConfig):
+        super().__init__()
+        self.config = config
+        self.projection = nn.Linear(config.hidden_size, config.projection_dim)
+
+    def forward(self, image_embedding):
+        image_embedding = self.projection(image_embedding)
+        return image_embedding
+
 class PaliGemma(nn.Module):
     
     def __init__(self, config: PaliGemmaConfig):
