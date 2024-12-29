@@ -81,7 +81,25 @@ class PaliGemmaLinearProjector(nn.Module):
         return image_embedding
 
 class GemmaMLP(nn.Module):
-    
+
+    def __init__(self, config: GemmaConfig):
+        super().__init__()
+        self.config = config
+        self.hidden_size = config.hidden_size
+        self.intermediate_size = config.intermediate_size
+        self.gate_proj = nn.Linear(self.hidden_size, self.intermediate_size)
+        self.up_proj = nn.Linear(self.hidden_size, self.intermediate_size)
+        self.down_proj = nn.Linear(self.intermediate_size, self.hidden_size)
+
+    def forward(self, x):
+        y = self.gate_proj(x)
+        y = nn.functional.gelu(y, approximate="tanh")
+        j = self.up_proj(x)
+        z = y * j
+        z = self.down_proj(z)
+        # self.down_proj(nn.functional.gelu(self.gate_proj(x), approximate="tanh") * self.up_proj(x))
+        return z
+
 
 class GemmaDecoderLayer(nn.Module):
 
