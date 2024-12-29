@@ -80,6 +80,30 @@ class PaliGemmaLinearProjector(nn.Module):
         image_embedding = self.projection(image_embedding)
         return image_embedding
 
+class GemmaMLP(nn.Module):
+    
+
+class GemmaDecoderLayer(nn.Module):
+
+    def __init__(self, config: GemmaConfig, layer_id):
+        super().__init__()
+        self.hidden_size = config.hidden_size
+        self.self_attention = GemmaAttention(config, layer_id)
+        self.mlp = GemmaMLP(config)
+        self.input_layernorm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+        self.post_attention_layernorm = GemmaRMSNorm(config.hidden_size, eps=config.rms_norm_eps)
+
+    def forward(self, attention_mask, hidden_states, position_ids, kv_cache):
+        residual = hidden_states
+        hidden_states = self.input_layernorm(hidden_states)
+        hidden_states = self.self_attention(hidden_states=hidden_states, attention_mask=attention_mask, position_ids=position_ids, kv_cache=kv_cache)
+        hidden_states += residual
+        residual = hidden_states
+        hidden_states = self.post_attention_layernorm(hidden_states)
+        hidden_states = self.mlp(hidden_states)
+        hidden_states += residual
+        return hidden_states
+
 class GemmaRMSNorm(nn.Module):
 
     def __init__(self, dim, eps=1e-6):
