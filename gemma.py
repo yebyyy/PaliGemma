@@ -127,6 +127,13 @@ class GemmaMLP(nn.Module):
         # self.down_proj(nn.functional.gelu(self.gate_proj(x), approximate="tanh") * self.up_proj(x))
         return z
 
+def repeat_kv(kv, num_kv_groups):
+    batch_size, num_kv_heads, seq_len, head_dim = kv.shape
+    if num_kv_groups == 1:
+        return kv
+    kv = kv[:, :, None, :, :].expand(batch_size, num_kv_heads, num_kv_groups, seq_len, head_dim) # repeats num_kv_groups times of the last two dimensions
+    return kv.reshape(batch_size, num_kv_heads * num_kv_groups, seq_len, head_dim)
+
 class GemmaAttention(nn.Module):
 
     def __init__(self, config: GemmaConfig, layer_idx: int):
@@ -181,7 +188,32 @@ class GemmaAttention(nn.Module):
         if kv_cache is not None:
             # update k, v to all the keys and values from the cache
             k, v = kv_cache.update(k, v, self.layer_idx)
+
+        # repeat to match the number of heads
+        # every num_kv_groups query heads share the same key and value head
+        # (no need if we are using CUDA)
+        k = repeat_kv(k, self.num_kv_groups)
+        v = repeat_kv(v, self.num_kv_groups)
+
+        # (batch, num_heads, seq_len_q, seq_len_kv)
+        attention_weights = torch.matmul(q, k.transpose(-2, -1)) * (self.head_dim ** -0.5)
         
+        assert attention_mask is not None
+        attention_weights = attention_weights + attention_mask
+
+        # softmax along the last dimension
+        attention_weights = nn.functional.softmax(attention_weights, dim=-1)
+        attention_weights = nn.functional.dropout(attention_weights, p=self.attention_dropout, training=self.training)
+
+        # (batch, num_heads, seq_len_q, head_dim)
+        attention_output = torch.matmul(attention_weights, v)
+
+        # (batch, seq_len_q, num_heads, head_dim)
+        attention_output = attention_output.transpose(1, 2).contiguous()
+        attention_output = attention_output.reshape(batch_size, seq_len, self.hidden_size)
+        
+        attention_output = self.out_proj(attention_output)
+        return attention_output, attention_weights
 
 
 class GemmaDecoderLayer(nn.Module):
