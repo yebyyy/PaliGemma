@@ -2,6 +2,33 @@ import torch
 import torch.nn as nn
 from siglip import SiglipVisionConfig, SigLipVisionModel
 
+class KVCache():
+
+    def __init__(self):
+        self.key_cache = []  # each layer has a key cache, the index is the layer index
+        self.value_cache = []
+
+    def num_items(self):
+        if len(self.key_cache) == 0:
+            return 0
+        else:
+            # (batch_size, num_kv_heads, seq_len, head_dim)
+            return self.key_cache[0].shape[-2]
+    
+    def update(self, key, value, layer_idx):
+        # add the current key and value to the cache
+        if len(self.key_cache) <= layer_idx:
+            # since index of the key_cache is the layer index, we need to
+            # create the kv_cache
+            self.key_cache.append(key)
+            self.value_cache.append(value)
+        else:
+            # if the cache for this layer already exists, update it
+            self.key_cache[layer_idx] = torch.cat([self.key_cache[layer_idx], key], dim=-2)
+            self.value_cache[layer_idx] = torch.cat([self.value_cache[layer_idx], value], dim=-2)
+
+        return self.key_cache[layer_idx], self.value_cache[layer_idx]
+
 class GemmaConfig():
 
     def __init__(
@@ -99,6 +126,62 @@ class GemmaMLP(nn.Module):
         z = self.down_proj(z)
         # self.down_proj(nn.functional.gelu(self.gate_proj(x), approximate="tanh") * self.up_proj(x))
         return z
+
+class GemmaAttention(nn.Module):
+
+    def __init__(self, config: GemmaConfig, layer_idx: int):
+        super().__init__()
+        self.config = config
+        self.layer_idx = layer_idx
+
+        self.hidden_size = config.hidden_size
+        self.attention_dropout = config.attention_dropout
+        self.num_heads = config.num_attention_heads
+        self.head_dim = config.head_dim
+        self.num_kv_heads = config.num_key_value_heads
+        self.num_kv_groups = self.num_heads // self.num_kv_heads  # how many query heads share a key and value head
+        self.max_position_embeddings = config.max_position_embeddings
+        self.rope_theta = config.rope_theta
+        self.is_causal = True
+
+        assert self.hidden_size % self.num_heads == 0, "hidden_size must be divisible by num_heads"
+
+        # (batch, num_patches, 1024) -> (batch, num_patches, 8 * 128)
+        self.q_proj = nn.Linear(self.hidden_size, self.head_dim * self.num_heads, bias=config.attention_bias)
+        # (batch, num_patches, 1024) -> (batch, num_patches, 1 * 128)
+        self.k_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias)
+        self.v_proj = nn.Linear(self.hidden_size, self.num_kv_heads * self.head_dim, bias=config.attention_bias)
+        # (batch, num_patches, 8 * 128) -> (batch, num_patches, 1024)
+        self.out_proj = nn.Linear(self.hidden_size, self.hidden_size, bias=config.attention_bias)
+        self.rotary_emb = GemmaRotaryEmbedding(
+            self.head_dim, 
+            max_position_embeddings=self.max_position_embeddings,
+            base=self.rope_theta,
+        )
+
+    def forward(self, hidden_states, attention_mask, position_ids, kv_cache, **kwargs):
+        batch_size, seq_len, embed_dim = hidden_states.shape
+        q = self.q_proj(hidden_states)
+        k = self.k_proj(hidden_states)
+        v = self.v_proj(hidden_states)
+
+        q = q.view(batch_size, seq_len, self.num_heads, self.head_dim)
+        k = k.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
+        v = v.view(batch_size, seq_len, self.num_kv_heads, self.head_dim)
+
+        q = q.transpose(1, 2)
+        k = k.transpose(1, 2)
+        v = v.transpose(1, 2)
+
+        # rotary position embedding
+        cos, sin = self.rotary_emb(position_ids, self.layer_idx)
+        q, k = apply_rotary_pos_emb(q, k, cos, sin)
+
+        # use the kv_cache instead of k and v to calculate the attention
+        if kv_cache is not None:
+            # update k, v to all the keys and values from the cache
+            k, v = kv_cache.update(k, v, self.layer_idx)
+        
 
 
 class GemmaDecoderLayer(nn.Module):
