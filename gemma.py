@@ -134,6 +134,49 @@ def repeat_kv(kv, num_kv_groups):
     kv = kv[:, :, None, :, :].expand(batch_size, num_kv_heads, num_kv_groups, seq_len, head_dim) # repeats num_kv_groups times of the last two dimensions
     return kv.reshape(batch_size, num_kv_heads * num_kv_groups, seq_len, head_dim)
 
+class GemmaRotaryEmbedding(nn.Module):
+
+    def __init__(self, dim, max_position_embeddings, base=10000, device=None):
+        super().__init__()
+        self.dim = dim
+        self.max_position_embeddings = max_position_embeddings
+        self.base = base
+        
+        inv_freq = 1.0 / (self.base ** (torch.arange(0, self.dim, 2) / self.dim))
+        self.register_buffer("inv_freq", inv_freq, persistent=False)  # persistent means not included in state_dict
+    
+    @torch.no_grad()
+    def forward(self, x, position_ids, seq_len=None):
+        self.inv_freq = self.inv_freq.to(x.device)
+        inv_freq_expand = self.inv_freq[None, :, None].expand(position_ids[0], -1, -1)  # (batch, dim//2, 1)
+        position_ids_expand = position_ids[:, None, :]
+        device_type = x.device.type
+        device_type = device_type if isinstance(device_type, str) and device_type != "mps" else "cpu"
+        with torch.autocast(device_type=device_type, enabled=False):
+            freqs = (inv_freq_expand.float() @ position_ids_expand.float()).transpose(1, 2)
+            # emb: [Batch_Size, Seq_Len, Head_Dim]
+            emb = torch.cat((freqs, freqs), dim=-1)
+            # cos, sin: [Batch_Size, Seq_Len, Head_Dim]
+            cos = emb.cos()
+            sin = emb.sin()
+        return cos.to(dtype=x.dtype), sin.to(dtype=x.dtype)
+
+
+def rotate_half(x):
+    # Build the [-x2, x1, -x4, x3, ...] tensor for the sin part of the positional encoding.
+    x1 = x[..., : x.shape[-1] // 2] # Takes the first half of the last dimension
+    x2 = x[..., x.shape[-1] // 2 :] # Takes the second half of the last dimension
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin, unsqueeze_dim=1):
+    cos = cos.unsqueeze(unsqueeze_dim) # Add the head dimension
+    sin = sin.unsqueeze(unsqueeze_dim) # Add the head dimension
+    # Apply the formula (34) of the Rotary Positional Encoding paper.
+    q_embed = (q * cos) + (rotate_half(q) * sin)
+    k_embed = (k * cos) + (rotate_half(k) * sin)
+    return q_embed, k_embed
+
 class GemmaAttention(nn.Module):
 
     def __init__(self, config: GemmaConfig, layer_idx: int):
@@ -313,7 +356,7 @@ class PaliGemma(nn.Module):
         self.linear_projector = PaliGemmaLinearProjector(config)
         self.vocab_size = config.vocab_size
 
-        language_model = GemmaCausalLM(config.text_config)
+        language_model = GemmaForCausalLM(config.text_config)
         self.language_model = language_model
 
         self.pad_token_id = self.config.pad_token_id if self.config.pad_token_id is not None else -1
