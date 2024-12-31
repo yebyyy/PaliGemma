@@ -434,8 +434,8 @@ class PaliGemma(nn.Module):
 
         output = self.language_model(
             attention_mask=attention_mask,
-            position_ids=position_ids,
-            input_embeddings=input_embeddings,
+            image_feature=pixel_values,
+            input_ids=input_ids,
             kv_cache=kv_cache,
         )
         
